@@ -1,0 +1,8 @@
+{
+  "name": "ICT Lab Evaluation — BS Marine Transportation",
+  "description": "Plain and simple rating, anonymous post-session feedback, and database export system for BS Marine Transportation ICT Laboratory sessions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

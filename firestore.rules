@@ -1,0 +1,149 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable global helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isTeacher() {
+      return isEmailVerified()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'edgardo.rojas@hcdc.edu.ph';
+    }
+
+    function isValidHcdcEmailFormat(email) {
+      return email is string
+        && email.size() >= 13
+        && email.size() <= 120
+        && email.lower().matches('^[^@\\s]+@hcdc\\.edu\\.ph$');
+    }
+
+    function isValidRating(val) {
+      return val is int && val >= 1 && val <= 5;
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    // Entity validation blueprints
+    function isValidLabActivity(data) {
+      return data.keys().hasAll(['code', 'title', 'topic', 'sessionDate', 'status', 'createdAt'])
+        && data.keys().hasOnly(['code', 'title', 'topic', 'sessionDate', 'status', 'createdAt'])
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 24
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 120
+        && data.topic is string && data.topic.size() >= 2 && data.topic.size() <= 80
+        && isValidDateString(data.sessionDate)
+        && data.status in ['active', 'archived']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidIdentityChoice(data) {
+      return data.isAnonymous is bool
+        && data.studentName is string && data.studentName.size() <= 120
+        && data.studentEmail is string && data.studentEmail.size() <= 120
+        && (
+          (data.isAnonymous == true && data.studentName == '' && data.studentEmail == '')
+          || (
+            data.isAnonymous == false
+            && data.studentName.size() >= 1
+            && isValidHcdcEmailFormat(data.studentEmail)
+            && data.studentEmail.lower() != 'edgardo.rojas@hcdc.edu.ph'
+            && (!isSignedIn() || data.studentEmail.lower() == request.auth.token.email.lower())
+          )
+        );
+    }
+
+    function isValidEvaluation(data) {
+      return data.keys().hasAll([
+          'activityId',
+          'activityTitle',
+          'activityRating',
+          'classRating',
+          'teachingRating',
+          'feedback',
+          'section',
+          'sessionDate',
+          'isAnonymous',
+          'studentName',
+          'studentEmail',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'activityId',
+          'activityTitle',
+          'activityRating',
+          'classRating',
+          'teachingRating',
+          'feedback',
+          'section',
+          'sessionDate',
+          'isAnonymous',
+          'studentName',
+          'studentEmail',
+          'createdAt'
+        ])
+        && isValidId(data.activityId)
+        && data.activityTitle is string && data.activityTitle.size() >= 1 && data.activityTitle.size() <= 120
+        && isValidRating(data.activityRating)
+        && isValidRating(data.classRating)
+        && isValidRating(data.teachingRating)
+        && data.feedback is string && data.feedback.size() <= 1500
+        && data.section is string && data.section.size() >= 1 && data.section.size() <= 40
+        && isValidDateString(data.sessionDate)
+        && isValidIdentityChoice(data)
+        && data.createdAt is timestamp;
+    }
+
+    // Lab Activities catalog: students can view active labs; only teacher manages
+    match /lab_activities/{activityId} {
+      allow get: if isValidId(activityId) && (existing().status == 'active' || isTeacher());
+      allow list: if existing().status == 'active' || isTeacher();
+      allow create: if isTeacher()
+        && isValidId(activityId)
+        && isValidLabActivity(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isTeacher()
+        && isValidId(activityId)
+        && isValidLabActivity(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['code', 'title', 'topic', 'sessionDate', 'status']);
+      allow delete: if isTeacher() && isValidId(activityId);
+    }
+
+    // Student evaluations: students can submit anonymously or with typed/signed-in @hcdc.edu.ph email; only teacher can read/delete
+    match /evaluations/{evaluationId} {
+      allow get: if isTeacher() && isValidId(evaluationId);
+      allow list: if isTeacher();
+      allow create: if isValidId(evaluationId)
+        && isValidEvaluation(incoming())
+        && exists(/databases/$(database)/documents/lab_activities/$(incoming().activityId))
+        && get(/databases/$(database)/documents/lab_activities/$(incoming().activityId)).data.status == 'active'
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isTeacher() && isValidId(evaluationId);
+    }
+  }
+}
